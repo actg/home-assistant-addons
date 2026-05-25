@@ -3,7 +3,7 @@
 **Make your Home Assistant accessible from anywhere — securely, through an SSH tunnel.**
 
 Autossh lets you forward local ports (like your Home Assistant UI) through a remote SSH server.
-It’s a simple alternative to VPNs or complex network setups — perfect if you can’t open ports on your home network.
+It's a simple alternative to VPNs or complex network setups — perfect if you can't open ports on your home network.
 
 You need access to a publicly available SSH server and some administrative privileges on that system.
 
@@ -13,7 +13,7 @@ The solution works reliably and without disruptions for a multitude of users.
 
 1. Set `hostname` and `username` in the add-on config.
 2. Start the add-on once → it generates a fresh SSH key pair.
-3. Copy the **public key** provided via logs to your remote server’s `authorized_keys`.
+3. Copy the **public key** provided via logs to your remote server's `authorized_keys`.
 4. **Important:** Add the `trusted_proxy` configuration to your Home Assistant's `configuration.yaml`.
 5. Start the add-on again and check logs for success or error messages.
 
@@ -69,7 +69,7 @@ This allows forwarded ports to bind to interfaces other than localhost.
 Run a reverse proxy (e.g. **Caddy**, **Traefik**, **NGINX**) to:
 
 * Expose the service publicly, and
-* Automatically manage SSL certificates (e.g. via Let’s Encrypt).
+* Automatically manage SSL certificates (e.g. via Let's Encrypt).
 
 ### Option 3: Use a Docker-based SSH Server (Recommended)
 
@@ -122,6 +122,25 @@ remote_port: 8123
 
 ----
 
+## Configuration Options
+
+| Option                    | Description                                                                                                                | Examples                                  |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `hostname`                | The remote server's hostname or IP address.                                                                                | `myserver.domain.tld`, `1.2.3.4`          |
+| `ssh_port`                | SSH port on the remote server.                                                                                             | `2222`                                    |
+| `username`                | SSH username used to connect.                                                                                              | `homeassistant`                           |
+| `remote_ip_address`       | IP address on the remote server to bind the Home Assistant UI on.                                                          | `127.0.0.1`                               |
+| `remote_port`             | Port on the remote server to bind the Home Assistant UI on.                                                                | `8123`                                    |
+| <br>**Secondary and Optional:** | |
+| `force_keygen`            | Force regeneration of SSH key pair on next start.                                                                          | `true` or `false` (default)               |
+| `other_ssh_options`       | Additional SSH options passed to autossh. Use `-v` for verbose logging during troubleshooting, leave empty otherwise.      | empty (default), `-v`                     |
+| `skip_remote_host_checks` | Disable host checks (useful if SSH server rate-limits connections).                                                        | `true` or `false` (default)               |
+| `local_ip_address`        | Local IP to reach the Home Assistant UI. Not needed on standard HA OS setups.                                              | `home-assistant` (default), `172.30.32.1` |
+| `local_port`              | Local port to reach the Home Assistant UI. Not needed on standard HA OS setups.                                            | `8123` (default)                          |
+| `remote_forwarding`       | Custom SSH remote forwardings, in addition to the Home Assistant UI. If not needed, leave empty with `[]`. **Keep these to intermittent, low-volume traffic** — see [Limitations: Continuous High-Throughput Forwarding](#limitations-continuous-high-throughput-forwarding). | `[]` (default)<br>`- 127.0.0.1:1883:core-mosquitto:1883` |
+
+----
+
 ## Additional Remarks
 
 ### Remote Server Security
@@ -148,23 +167,18 @@ The issue should quickly resolve itself, as the SSH server will eventually time-
 However, depending on your OS and existing configuration, this might not be the case.
 
 **Solution:**
-Please add `TCPKeepAlive yes`, `ClientAliveInterval 30`, and `ClientAliveCountMax 3` to `/etc/ssh/sshd_config` on the remote server. 
+Please add `TCPKeepAlive yes`, `ClientAliveInterval 30`, and `ClientAliveCountMax 3` to `/etc/ssh/sshd_config` on the remote server.
 
-----
+> **Note:** this fix is sufficient for occasional drops on *idle* tunnels but **not** for continuous high-throughput forwards (e.g. RTSP video, large MQTT volume) — under sustained traffic the keepalive itself gets blocked by queued data and never fires. See [Limitations: Continuous High-Throughput Forwarding](#limitations-continuous-high-throughput-forwarding).
 
-## Configuration Options
+### Limitations: Continuous High-Throughput Forwarding
 
-| Option                    | Description                                                                                                                | Examples                                  |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| `hostname`                | The remote server’s hostname or IP address.                                                                                | `myserver.domain.tld`, `1.2.3.4`          |
-| `ssh_port`                | SSH port on the remote server.                                                                                             | `2222`                                    |
-| `username`                | SSH username used to connect.                                                                                              | `homeassistant`                           |
-| `remote_ip_address`       | IP address on the remote server to bind the Home Assistant UI on.                                                          | `127.0.0.1`                               |
-| `remote_port`             | Port on the remote server to bind the Home Assistant UI on.                                                                | `8123`                                    |
-| <br>**Secondary and Optional:** | |
-| `force_keygen`            | Force regeneration of SSH key pair on next start.                                                                          | `true` or `false` (default)               |
-| `other_ssh_options`       | Additional SSH options passed to autossh. Use `-v` for verbose logging during troubleshooting, leave empty otherwise.      | empty (default), `-v`                     |
-| `skip_remote_host_checks` | Disable host checks (useful if SSH server rate-limits connections).                                                        | `true` or `false` (default)               |
-| `local_ip_address`        | Local IP to reach the Home Assistant UI. Not needed on standard HA OS setups.                                              | `home-assistant` (default), `172.30.32.1` |
-| `local_port`              | Local port to reach the Home Assistant UI. Not needed on standard HA OS setups.                                            | `8123` (default)                          |
-| `remote_forwarding`       | Custom SSH remote forwardings, in addition to the Home Assistant UI. If not needed, leave empty with `[]`                  | `[]` (default)<br>`- 127.0.0.1:1883:core-mosquitto:1883` |
+This add-on relays each forwarded port through a single SSH TCP connection. That works reliably for **intermittent, low-volume traffic** — the Home Assistant web UI, REST/WebSocket API, occasional MQTT messages, administrative SSH/SFTP access. It is **not well suited for continuous high-throughput streams** such as RTSP/RTP video, large file synchronisation, or heavy MQTT under sustained load.
+
+**Why.** A brief network blip between client and server — a NAT entry expiring on a home router, a few seconds of packet loss, an ISP path change — can leave unacknowledged bytes queued in the SSH connection's TCP send buffer. SSH's `ServerAliveInterval` / `ClientAliveInterval` keepalive is application-layer: its packet sits in the same send buffer as that queued data and cannot reach the wire until the buffer drains. With an *idle* tunnel the buffer is empty, the keepalive fires, the dead peer is detected within ~90 s, and reconnect is clean — this is what the add-on's `autossh -M 0 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes` settings give you. With a *busy* tunnel the keepalive never gets sent, and detection falls back to the kernel's TCP retransmit budget (`net.ipv4.tcp_retries2`, ~15 minutes by default). During that window the remote-side socket stays "alive," the forwarded port stays bound, and autossh's reconnect loop hits the [`Address already in use`](#blocked-socket-after-connection-timeout) error every ~5 s until the kernel finally times out — your forward is effectively down for the duration. This is a property of SSH port forwarding as a transport, not of this add-on, and tuning `ClientAliveInterval` on the server cannot solve it for busy tunnels because the keepalive is precisely what gets blocked.
+
+**Recommendation.** For continuous high-bandwidth flows between Home Assistant and a remote server, use a UDP-based VPN where each TCP flow is independent end-to-end and brief path blips do not stall the tunnel. [WireGuard](https://www.wireguard.com/) is the typical answer; the [Home Assistant WireGuard add-on](https://github.com/hassio-addons/addon-wireguard) makes this straightforward on the HA side. Keep this autossh add-on for HA UI / API / admin access and other intermittent traffic.
+
+**Further reading.** [Why TCP Over TCP Is A Bad Idea — Olaf Titz, 2001](http://sites.inka.de/bigred/devel/tcp-tcp.html) · [TCP meltdown problem — Wikipedia](https://en.wikipedia.org/wiki/TCP_meltdown_problem) · [Understanding TCP over TCP — SPIE 2005](https://ui.adsabs.harvard.edu/abs/2005SPIE.6011..138H/abstract) · [SSH server does not timeout the client — Arch Linux forums](https://bbs.archlinux.org/viewtopic.php?id=254707)
+
+---
